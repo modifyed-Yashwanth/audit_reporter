@@ -6,19 +6,55 @@ import type { LaunchedChrome } from "chrome-launcher";
 import type { LighthouseResult, CoreWebVitals, AuditScores } from "@/lib/types";
 import { normalizeScore } from "@/lib/utils/scoreFormatter";
 
-/**
- * Runs Lighthouse audit on a given URL
- * @param url - The URL to audit
- * @returns Lighthouse result
- */
-export async function runLighthouseAudit(
-  url: string
-): Promise<LighthouseResult> {
+const AUDIT_CATEGORIES = [
+  "performance",
+  "seo",
+  "accessibility",
+  "best-practices",
+] as const;
+
+async function runPageSpeedAudit(url: string): Promise<LighthouseResult> {
+  const endpoint = new URL(
+    "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
+  );
+
+  endpoint.searchParams.set("url", url);
+  endpoint.searchParams.set("strategy", "mobile");
+
+  AUDIT_CATEGORIES.forEach((category) => {
+    endpoint.searchParams.append("category", category);
+  });
+
+  if (process.env.PAGESPEED_API_KEY) {
+    endpoint.searchParams.set("key", process.env.PAGESPEED_API_KEY);
+  }
+
+  const response = await fetch(endpoint.toString(), {
+    signal: AbortSignal.timeout(45000),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `PageSpeed API failed: ${response.status} ${response.statusText} ${errorText}`.trim()
+    );
+  }
+
+  const payload = (await response.json()) as {
+    lighthouseResult?: LighthouseResult["lhr"];
+  };
+
+  if (!payload.lighthouseResult) {
+    throw new Error("PageSpeed API did not return lighthouseResult");
+  }
+
+  return { lhr: payload.lighthouseResult };
+}
+
+async function runLocalLighthouse(url: string): Promise<LighthouseResult> {
   let chrome: LaunchedChrome | null = null;
 
   try {
-    // Lazy-load heavy Node-only dependencies so serverless platforms can still
-    // return controlled API errors instead of crashing at module init time.
     const [lighthouseModule, chromeLauncherModule] = await Promise.all([
       import("lighthouse"),
       import("chrome-launcher"),
@@ -27,7 +63,6 @@ export async function runLighthouseAudit(
     const lighthouse = lighthouseModule.default;
     const chromeLauncher = chromeLauncherModule;
 
-    // Launch Chrome
     chrome = await chromeLauncher.launch({
       chromeFlags: ["--headless", "--no-sandbox", "--disable-gpu"],
     });
@@ -35,11 +70,10 @@ export async function runLighthouseAudit(
     const options = {
       logLevel: "info" as const,
       output: "json" as const,
-      onlyCategories: ["performance", "seo", "accessibility", "best-practices"],
+      onlyCategories: [...AUDIT_CATEGORIES],
       port: chrome.port,
     };
 
-    // Run Lighthouse
     const runnerResult = await lighthouse(url, options);
 
     if (!runnerResult) {
@@ -48,10 +82,28 @@ export async function runLighthouseAudit(
 
     return runnerResult as unknown as LighthouseResult;
   } finally {
-    // Clean up Chrome instance
     if (chrome) {
       await chrome.kill();
     }
+  }
+}
+
+/**
+ * Runs Lighthouse audit on a given URL
+ * @param url - The URL to audit
+ * @returns Lighthouse result
+ */
+export async function runLighthouseAudit(
+  url: string
+): Promise<LighthouseResult> {
+  try {
+    return await runLocalLighthouse(url);
+  } catch (localError) {
+    console.warn(
+      "Local Lighthouse failed, falling back to PageSpeed API:",
+      localError
+    );
+    return runPageSpeedAudit(url);
   }
 }
 
