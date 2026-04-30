@@ -28,12 +28,55 @@ export default function Home() {
         body: JSON.stringify({ url }),
       });
 
+      const parseApiResponse = async <T,>(
+        res: Response,
+      ): Promise<{ data: T | null; message: string | null }> => {
+        const contentType = res.headers.get("content-type") || "";
+        const isJson = contentType.includes("application/json");
+
+        if (isJson) {
+          try {
+            const json = (await res.json()) as T & { error?: string };
+            return {
+              data: json,
+              message:
+                typeof json === "object" &&
+                json !== null &&
+                "error" in json &&
+                typeof json.error === "string"
+                  ? json.error
+                  : null,
+            };
+          } catch {
+            return {
+              data: null,
+              message: "Server returned invalid JSON. Please try again.",
+            };
+          }
+        }
+
+        const text = await res.text();
+        const cleanedText = text
+          .replace(/<[^>]*>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        return {
+          data: null,
+          message: cleanedText || "Unexpected server response.",
+        };
+      };
+
+      const { data, message } = await parseApiResponse<AuditResponse>(response);
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to run audit");
+        throw new Error(message || "Failed to run audit");
       }
 
-      const data = await response.json();
+      if (!data) {
+        throw new Error("Audit response was empty. Please try again.");
+      }
+
       setAuditData(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred");
@@ -315,7 +358,7 @@ export default function Home() {
 
             {/* PDF Download */}
             <section>
-              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 rounded-xl border border-blue-200 dark:border-blue-900 p-6">
+              <div className="bg-linear-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 rounded-xl border border-blue-200 dark:border-blue-900 p-6">
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                   <div className="flex items-start gap-4">
                     <div className="bg-blue-100 dark:bg-blue-900/50 rounded-lg p-3">
@@ -417,7 +460,7 @@ function ScoreCard({
   return (
     <div
       className={`bg-white dark:bg-slate-900 rounded-xl shadow-sm border-2 ${getScoreRing(
-        score
+        score,
       )} border-opacity-50 dark:border-opacity-30 p-6`}
     >
       <div className="flex items-center justify-between mb-3">

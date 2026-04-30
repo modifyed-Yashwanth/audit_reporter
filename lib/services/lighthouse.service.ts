@@ -2,8 +2,7 @@
  * Lighthouse service for running audits
  */
 
-import lighthouse from "lighthouse";
-import * as chromeLauncher from "chrome-launcher";
+import type { LaunchedChrome } from "chrome-launcher";
 import type { LighthouseResult, CoreWebVitals, AuditScores } from "@/lib/types";
 import { normalizeScore } from "@/lib/utils/scoreFormatter";
 
@@ -15,9 +14,19 @@ import { normalizeScore } from "@/lib/utils/scoreFormatter";
 export async function runLighthouseAudit(
   url: string
 ): Promise<LighthouseResult> {
-  let chrome: chromeLauncher.LaunchedChrome | null = null;
+  let chrome: LaunchedChrome | null = null;
 
   try {
+    // Lazy-load heavy Node-only dependencies so serverless platforms can still
+    // return controlled API errors instead of crashing at module init time.
+    const [lighthouseModule, chromeLauncherModule] = await Promise.all([
+      import("lighthouse"),
+      import("chrome-launcher"),
+    ]);
+
+    const lighthouse = lighthouseModule.default;
+    const chromeLauncher = chromeLauncherModule;
+
     // Launch Chrome
     chrome = await chromeLauncher.launch({
       chromeFlags: ["--headless", "--no-sandbox", "--disable-gpu"],
